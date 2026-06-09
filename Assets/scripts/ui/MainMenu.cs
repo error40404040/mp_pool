@@ -1,13 +1,13 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.Audio; 
 
 public class MainMenuController : MonoBehaviour
 {
-    [Header("Íàñòğîéêè")]
+    [Header("ĞĞ°ÑÑ‚Ñ€Ğ¾Ğ¹ĞºĞ¸")]
     public string gameSceneName = "SampleScene";
 
-    [Header("Çâóê")]
+    [Header("Ğ—Ğ²ÑƒĞº")]
     public AudioMixer mainMixer; 
     [Range(0.0001f, 1f)]
     public float startVolume = 0.2f; 

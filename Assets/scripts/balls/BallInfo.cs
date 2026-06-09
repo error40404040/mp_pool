@@ -1,4 +1,4 @@
-using UnityEngine;
+п»їusing UnityEngine;
 
 public class BallInfo : MonoBehaviour
 {
@@ -10,9 +10,9 @@ public class BallInfo : MonoBehaviour
         EightBall   
     }
 
-    [Header("Тип шара")]
+    [Header("РўРёРї С€Р°СЂР°")]
     public BallType type;
 
-    [Tooltip("Номер шара")]
+    [Tooltip("РќРѕРјРµСЂ С€Р°СЂР°")]
     public int number;
 }

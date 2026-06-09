@@ -1,7 +1,8 @@
-using UnityEngine;
+п»їusing UnityEngine;
 using UnityEngine.InputSystem;
-using System.Collections.Generic;
+using Unity.Netcode;
 using System.Collections;
+using System.Collections.Generic;
 
 public enum GameState { PlayerAiming, PlacingCueBall, BallsMoving, SelectingPocket, GameOver }
 public enum Player { Player1, Player2 }
@@ -12,7 +13,7 @@ public class GameManager : MonoBehaviour
     public static GameManager Instance { get; private set; }
     public GameState CurrentState { get; private set; }
 
-    [Header("Ссылки")]
+    [Header("РЎСЃС‹Р»РєРё")]
     public CueController cueController;
     public CameraController cameraController;
     public List<Rigidbody> allBalls;
@@ -20,17 +21,21 @@ public class GameManager : MonoBehaviour
     public Transform cueBallStartPoint;
     public BallPlacer ballPlacer;
 
-    [Header("Правила игры")]
+    [Header("РџСЂР°РІРёР»Р° РёРіСЂС‹")]
     public Player currentPlayer;
     public BallGroup player1Target = BallGroup.None;
     public BallGroup player2Target = BallGroup.None;
     private bool isTableOpen = true;
 
-    [Header("Заказ лузы")]
+    [Header("Р—Р°РєР°Р· Р»СѓР·С‹")]
     public Pocket orderedPocket;
 
     private bool wasFoulCommitted = false;
     private bool wasPlayerBallPocketed = false;
+    private bool isGameOver = false;
+    private Player gameWinner = Player.Player1;
+    private readonly List<int> player1PocketedBalls = new List<int>();
+    private readonly List<int> player2PocketedBalls = new List<int>();
 
     private List<Vector3> lastFramePositions;
     private float stopTimer = 0f;
@@ -38,6 +43,7 @@ public class GameManager : MonoBehaviour
     private const float timeToConsiderStopped = 0.2f;
 
     private bool justOrderedPocket = false;
+    private bool isApplyingNetworkState = false;
 
     private void Awake()
     {
@@ -52,15 +58,20 @@ public class GameManager : MonoBehaviour
         };
     }
 
-    private void OnEnable() { controls.Gameplay.Enable(); }
-    private void OnDisable() { controls.Gameplay.Disable(); }
+    private void OnEnable() { controls?.Gameplay.Enable(); }
+    private void OnDisable() { controls?.Gameplay.Disable(); }
 
     private void Start()
     {
         currentPlayer = Player.Player1;
         isTableOpen = true;
+        isGameOver = false;
+        player1Target = BallGroup.None;
+        player2Target = BallGroup.None;
+        player1PocketedBalls.Clear();
+        player2PocketedBalls.Clear();
+        orderedPocket = null;
 
-        // при старте подсвечиваем первого игрока 
         if (UIManager.Instance != null)
         {
             UIManager.Instance.UpdateActivePlayerUI(currentPlayer);
@@ -132,7 +143,7 @@ public class GameManager : MonoBehaviour
     {
         if (CurrentState == newState && newState != GameState.PlayerAiming) return;
 
-        if (newState == GameState.PlayerAiming)
+        if (newState == GameState.PlayerAiming && !isApplyingNetworkState)
         {
             if (!justOrderedPocket)
             {
@@ -158,20 +169,19 @@ public class GameManager : MonoBehaviour
                 stopTimer = 0f;
                 cueController.gameObject.SetActive(true);
                 if (ballPlacer != null) ballPlacer.enabled = false;
-                if (cameraController != null) cameraController.SnapToTarget();
+                if (cameraController != null && (cueController == null || cueController.CanLocalControlCue())) cameraController.SnapToTarget();
                 foreach (var pocket in allPockets) pocket.ClearScoredBalls();
-                if (UIManager.Instance != null) UIManager.Instance.SetAimingHUDVisible(true);
                 break;
 
             case GameState.SelectingPocket:
                 cueController.gameObject.SetActive(false);
                 if (UIManager.Instance != null) UIManager.Instance.SetAimingHUDVisible(false);
-                if (UIManager.Instance != null) UIManager.Instance.SetPocketPromptVisible(true);
+                if (UIManager.Instance != null) UIManager.Instance.SetPocketPromptVisible(true, CanLocalControlCurrentPlayer());
                 break;
 
             case GameState.PlacingCueBall:
                 if (UIManager.Instance != null) UIManager.Instance.SetPocketPromptVisible(false);
-                cueController.gameObject.SetActive(false);
+                if (cueController != null) cueController.gameObject.SetActive(false);
                 if (ballPlacer != null) ballPlacer.enabled = true;
                 if (UIManager.Instance != null) UIManager.Instance.SetAimingHUDVisible(false);
                 break;
@@ -188,6 +198,9 @@ public class GameManager : MonoBehaviour
                 if (UIManager.Instance != null) UIManager.Instance.SetAimingHUDVisible(false);
                 break;
         }
+
+        UpdateLocalAimingHudVisibility();
+        BroadcastNetworkState();
     }
 
 
@@ -206,6 +219,10 @@ public class GameManager : MonoBehaviour
             wasFoulCommitted = true;
             ball.gameObject.SetActive(false);
             RespawnCueBall();
+            if (NetworkBallSync.Instance != null)
+            {
+                NetworkBallSync.Instance.BroadcastNow();
+            }
             return;
         }
 
@@ -218,6 +235,10 @@ public class GameManager : MonoBehaviour
                 Player winner = (currentPlayer == Player.Player1) ? Player.Player2 : Player.Player1;
                 EndGame(winner);
             }
+            if (NetworkBallSync.Instance != null)
+            {
+                NetworkBallSync.Instance.BroadcastNow();
+            }
             return;
         }
 
@@ -229,24 +250,18 @@ public class GameManager : MonoBehaviour
             AssignBallGroups(ball.type);
             wasPlayerBallPocketed = true; 
 
-            if (UIManager.Instance != null)
-                UIManager.Instance.AddBallToInventory(ball.number, currentPlayer);
+            AddPocketedBallToInventory(ball.number, currentPlayer);
         }
         else
         {
             Player ballOwner = (player1Target == pocketedBallGroup) ? Player.Player1 : Player.Player2;
 
-            if (UIManager.Instance != null)
-                UIManager.Instance.AddBallToInventory(ball.number, ballOwner);
+            AddPocketedBallToInventory(ball.number, ballOwner);
 
             BallGroup currentTarget = (currentPlayer == Player.Player1) ? player1Target : player2Target;
             if (pocketedBallGroup == currentTarget)
             {
                 wasPlayerBallPocketed = true;
-            }
-            else
-            {
-                Debug.LogWarning($"Игрок {currentPlayer} забил шар соперника ({ballOwner})!");
             }
         }
     }
@@ -266,18 +281,15 @@ public class GameManager : MonoBehaviour
 
         if (wasFoulCommitted)
         {
-            Debug.Log("Был совершен фол. Передача хода.");
             SwitchPlayer();
             ChangeState(GameState.PlacingCueBall);
         }
         else if (wasPlayerBallPocketed)
         {
-            Debug.Log("Был забит свой шар. Ход продолжается.");
             ChangeState(GameState.PlayerAiming);
         }
         else 
         {
-            Debug.Log("Промах. Передача хода.");
             SwitchPlayer();
             ChangeState(GameState.PlayerAiming);
         }
@@ -293,14 +305,144 @@ public class GameManager : MonoBehaviour
         {
             UIManager.Instance.UpdateActivePlayerUI(currentPlayer);
         }
+
+        UpdateLocalAimingHudVisibility();
+        BroadcastNetworkState();
+    }
+
+    public void ApplyNetworkState(Player networkCurrentPlayer, GameState networkState)
+    {
+        currentPlayer = networkCurrentPlayer;
+
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.UpdateActivePlayerUI(currentPlayer);
+        }
+
+        UpdateLocalAimingHudVisibility();
+
+        if (CurrentState != networkState)
+        {
+            try
+            {
+                isApplyingNetworkState = true;
+                ChangeState(networkState);
+            }
+            finally
+            {
+                isApplyingNetworkState = false;
+            }
+        }
+    }
+
+    public void ApplyNetworkRules(
+        BallGroup networkPlayer1Target,
+        BallGroup networkPlayer2Target,
+        bool networkTableOpen,
+        int orderedPocketIndex,
+        bool networkGameOver,
+        Player networkWinner,
+        int[] player1Balls,
+        int[] player2Balls)
+    {
+        player1Target = networkPlayer1Target;
+        player2Target = networkPlayer2Target;
+        isTableOpen = networkTableOpen;
+        isGameOver = networkGameOver;
+        gameWinner = networkWinner;
+        orderedPocket = GetPocketByIndex(orderedPocketIndex);
+
+        player1PocketedBalls.Clear();
+        player2PocketedBalls.Clear();
+        if (player1Balls != null) player1PocketedBalls.AddRange(player1Balls);
+        if (player2Balls != null) player2PocketedBalls.AddRange(player2Balls);
+
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.SetBallInventory(player1PocketedBalls, player2PocketedBalls);
+            if (isGameOver)
+            {
+                UIManager.Instance.ShowGameOver(gameWinner);
+            }
+        }
+    }
+
+    private void BroadcastNetworkState()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening || !networkManager.IsServer)
+        {
+            return;
+        }
+
+        NetworkPlayer.BroadcastGameState(currentPlayer, CurrentState);
+        NetworkPlayer.BroadcastRulesState(
+            player1Target,
+            player2Target,
+            isTableOpen,
+            GetPocketIndex(orderedPocket),
+            isGameOver,
+            gameWinner,
+            player1PocketedBalls.ToArray(),
+            player2PocketedBalls.ToArray());
+
+        if (NetworkBallSync.Instance != null)
+        {
+            NetworkBallSync.Instance.BroadcastNow();
+        }
+    }
+
+    private void UpdateLocalAimingHudVisibility()
+    {
+        if (UIManager.Instance == null)
+        {
+            return;
+        }
+
+        bool canShowHud = CurrentState == GameState.PlayerAiming
+            && cueController != null
+            && cueController.CanLocalControlCue();
+
+        UIManager.Instance.SetAimingHUDVisible(canShowHud);
+    }
+
+    private void AddPocketedBallToInventory(int ballNumber, Player owner)
+    {
+        List<int> targetList = owner == Player.Player1 ? player1PocketedBalls : player2PocketedBalls;
+        if (!targetList.Contains(ballNumber))
+        {
+            targetList.Add(ballNumber);
+        }
+
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.SetBallInventory(player1PocketedBalls, player2PocketedBalls);
+        }
+
+        BroadcastNetworkState();
     }
 
     private void RespawnCueBall()
     {
         Rigidbody cueBallRb = cueController.cueBall.GetComponent<Rigidbody>();
-        cueBallRb.linearVelocity = Vector3.zero;
-        cueBallRb.angularVelocity = Vector3.zero;
-        if (!allBalls.Contains(cueBallRb)) allBalls.Add(cueBallRb);
+        Transform cueBall = cueController.cueBall;
+
+        if (cueBallRb != null)
+        {
+            cueBallRb.isKinematic = true;
+            cueBallRb.linearVelocity = Vector3.zero;
+            cueBallRb.angularVelocity = Vector3.zero;
+            if (!allBalls.Contains(cueBallRb)) allBalls.Add(cueBallRb);
+        }
+
+        Collider cueBallCollider = cueBall.GetComponent<Collider>();
+        if (cueBallCollider != null)
+        {
+            cueBallCollider.enabled = false;
+        }
+
+        cueBall.position = GetSafeCueBallPlacementPosition();
+        Physics.SyncTransforms();
     }
 
     private bool HasPocketedAllBalls(Player player)
@@ -320,18 +462,238 @@ public class GameManager : MonoBehaviour
     public void SetTargetPocket(Pocket pocket)
     {
         if (CurrentState != GameState.SelectingPocket) return;
+        if (!CanLocalControlCurrentPlayer()) return;
 
+        if (IsNetworkClientOnly())
+        {
+            NetworkPlayer.Local?.RequestPocketSelectionServerRpc(GetPocketIndex(pocket));
+            return;
+        }
+
+        ApplyTargetPocket(pocket);
+    }
+
+    public bool TryApplyNetworkPocketSelectionFromServer(ulong senderClientId, int pocketIndex)
+    {
+        if (!IsNetworkServer() || CurrentState != GameState.SelectingPocket)
+        {
+            return false;
+        }
+
+        int slotIndex = currentPlayer == Player.Player1 ? 0 : 1;
+        if (NetworkPlayer.TryGetClientIdForPlayerSlot(slotIndex, out ulong activeClientId) && senderClientId != activeClientId)
+        {
+            return false;
+        }
+
+        Pocket pocket = GetPocketByIndex(pocketIndex);
+        if (pocket == null)
+        {
+            return false;
+        }
+
+        ApplyTargetPocket(pocket);
+        return true;
+    }
+
+    private void ApplyTargetPocket(Pocket pocket)
+    {
         orderedPocket = pocket;
-        Debug.Log("Луза заказана: " + pocket.name);
 
         justOrderedPocket = true; 
 
         ChangeState(GameState.PlayerAiming);
     }
 
+    private int GetPocketIndex(Pocket pocket)
+    {
+        if (pocket == null || allPockets == null)
+        {
+            return -1;
+        }
+
+        return allPockets.IndexOf(pocket);
+    }
+
+    private Pocket GetPocketByIndex(int pocketIndex)
+    {
+        if (allPockets == null || pocketIndex < 0 || pocketIndex >= allPockets.Count)
+        {
+            return null;
+        }
+
+        return allPockets[pocketIndex];
+    }
+
     public void FinishPlacingBall()
     {
         StartCoroutine(FinishPlacingBallRoutine());
+    }
+
+    public bool TryApplyNetworkCueBallPlacementFromServer(ulong senderClientId, Vector3 position)
+    {
+        if (!IsNetworkServer() || CurrentState != GameState.PlacingCueBall || cueController == null || cueController.cueBall == null)
+        {
+            return false;
+        }
+
+        int slotIndex = currentPlayer == Player.Player1 ? 0 : 1;
+        if (NetworkPlayer.TryGetClientIdForPlayerSlot(slotIndex, out ulong activeClientId) && senderClientId != activeClientId)
+        {
+            return false;
+        }
+
+        ApplyCueBallPlacement(position);
+        ChangeState(GameState.PlayerAiming);
+        return true;
+    }
+
+    public bool TryBroadcastNetworkCueBallPreviewFromServer(ulong senderClientId, Vector3 position)
+    {
+        if (!IsNetworkServer() || CurrentState != GameState.PlacingCueBall || cueController == null || cueController.cueBall == null)
+        {
+            return false;
+        }
+
+        int slotIndex = currentPlayer == Player.Player1 ? 0 : 1;
+        if (NetworkPlayer.TryGetClientIdForPlayerSlot(slotIndex, out ulong activeClientId) && senderClientId != activeClientId)
+        {
+            return false;
+        }
+
+        Transform cueBall = cueController.cueBall;
+        Vector3 previewPosition = new Vector3(position.x, GetCueBallPlacementY(cueBall), position.z);
+        NetworkPlayer.BroadcastCueBallPreview(previewPosition);
+        return true;
+    }
+
+    public void ApplyNetworkCueBallPreview(Vector3 position)
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if ((networkManager != null && networkManager.IsServer && !networkManager.IsClient)
+            || CurrentState != GameState.PlacingCueBall
+            || CanLocalControlCurrentPlayer()
+            || cueController == null
+            || cueController.cueBall == null)
+        {
+            return;
+        }
+
+        Transform cueBall = cueController.cueBall;
+        cueBall.gameObject.SetActive(true);
+        cueBall.position = new Vector3(position.x, GetCueBallPlacementY(cueBall), position.z);
+
+        Rigidbody cueBallRb = cueBall.GetComponent<Rigidbody>();
+        if (cueBallRb != null)
+        {
+            cueBallRb.isKinematic = true;
+            cueBallRb.linearVelocity = Vector3.zero;
+            cueBallRb.angularVelocity = Vector3.zero;
+        }
+
+        Collider cueBallCollider = cueBall.GetComponent<Collider>();
+        if (cueBallCollider != null)
+        {
+            cueBallCollider.enabled = false;
+        }
+
+        BallPhysics cueBallPhysics = cueBall.GetComponent<BallPhysics>();
+        if (cueBallPhysics != null)
+        {
+            cueBallPhysics.enabled = false;
+        }
+
+        MeshRenderer[] renderers = cueBall.GetComponentsInChildren<MeshRenderer>(true);
+        foreach (MeshRenderer renderer in renderers)
+        {
+            renderer.enabled = true;
+        }
+
+        Physics.SyncTransforms();
+    }
+
+    public void ApplyLocalCueBallPlacement(Vector3 position)
+    {
+        ApplyCueBallPlacement(position);
+        FinishPlacingBall();
+    }
+
+    private void ApplyCueBallPlacement(Vector3 position)
+    {
+        Transform cueBall = cueController.cueBall;
+        float fixedY = GetCueBallPlacementY(cueBall);
+
+        Rigidbody cueBallRb = cueBall.GetComponent<Rigidbody>();
+        Collider cueBallCollider = cueBall.GetComponent<Collider>();
+
+        if (cueBallCollider != null)
+        {
+            cueBallCollider.enabled = false;
+        }
+
+        if (cueBallRb != null)
+        {
+            cueBallRb.isKinematic = true;
+            cueBallRb.linearVelocity = Vector3.zero;
+            cueBallRb.angularVelocity = Vector3.zero;
+        }
+
+        cueBall.position = new Vector3(position.x, fixedY, position.z);
+        cueBall.gameObject.SetActive(true);
+        Physics.SyncTransforms();
+
+        if (cueBallRb != null)
+        {
+            cueBallRb.isKinematic = false;
+            if (!allBalls.Contains(cueBallRb))
+            {
+                allBalls.Add(cueBallRb);
+            }
+        }
+
+        if (cueBallCollider != null)
+        {
+            cueBallCollider.enabled = true;
+        }
+
+        Physics.SyncTransforms();
+
+        MeshRenderer[] renderers = cueBall.GetComponentsInChildren<MeshRenderer>(true);
+        foreach (MeshRenderer renderer in renderers)
+        {
+            renderer.enabled = true;
+        }
+
+        if (NetworkBallSync.Instance != null)
+        {
+            NetworkBallSync.Instance.BroadcastNow();
+        }
+    }
+
+    private Vector3 GetSafeCueBallPlacementPosition()
+    {
+        if (cueBallStartPoint != null)
+        {
+            return cueBallStartPoint.position;
+        }
+
+        Transform cueBall = cueController.cueBall;
+        return new Vector3(cueBall.position.x, GetCueBallPlacementY(cueBall), cueBall.position.z);
+    }
+
+    private float GetCueBallPlacementY(Transform cueBall)
+    {
+        if (ballPlacer != null && ballPlacer.lockedY != 0f)
+        {
+            return ballPlacer.lockedY;
+        }
+
+        if (cueBallStartPoint != null)
+        {
+            return cueBallStartPoint.position.y;
+        }
+
+        return cueBall.position.y;
     }
 
     private IEnumerator FinishPlacingBallRoutine()
@@ -343,7 +705,40 @@ public class GameManager : MonoBehaviour
 
     private void EndGame(Player winner)
     {
+        isGameOver = true;
+        gameWinner = winner;
         ChangeState(GameState.GameOver);
         UIManager.Instance.ShowGameOver(winner);
+        BroadcastNetworkState();
+    }
+
+    private static bool IsNetworkServer()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsListening && networkManager.IsServer;
+    }
+
+    private static bool IsNetworkClientOnly()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsListening && networkManager.IsClient && !networkManager.IsServer;
+    }
+
+    private static bool CanLocalControlCurrentPlayer()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+        {
+            return true;
+        }
+
+        if (GameManager.Instance == null || NetworkPlayer.Local == null)
+        {
+            return false;
+        }
+
+        int slotIndex = GameManager.Instance.currentPlayer == Player.Player1 ? 0 : 1;
+        return NetworkPlayer.TryGetClientIdForPlayerSlot(slotIndex, out ulong activeClientId)
+            && activeClientId == NetworkPlayer.Local.OwnerClientId;
     }
 }

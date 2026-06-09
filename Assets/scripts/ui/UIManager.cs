@@ -1,32 +1,36 @@
-using UnityEngine;
+Ôªøusing UnityEngine;
 using TMPro;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.Audio;
+using System.Collections.Generic;
 
 public class UIManager : MonoBehaviour
 {
     public static UIManager Instance { get; private set; }
 
-    [Header("œ‡ÌÂÎË Ë„ÓÍÓ‚")]
+    [Header("–ü–∞–Ω–µ–ª–∏ –∏–≥—Ä–æ–∫–æ–≤")]
     public CanvasGroup p1CanvasGroup;
     public CanvasGroup p2CanvasGroup;
+    [SerializeField] private TextMeshProUGUI p1NameText;
+    [SerializeField] private TextMeshProUGUI p2NameText;
 
-    [Header("»Ì‚ÂÌÚ‡¸ ¯‡Ó‚")]
+    [Header("–ò–Ω–≤–µ–Ω—Ç–∞—Ä—å —à–∞—Ä–æ–≤")]
     public RectTransform p1BallContainer;
     public RectTransform p2BallContainer;
     public GameObject ballIconPrefab;
     public Sprite[] ballSprites;
 
-    [Header("HUD œËˆÂÎË‚‡ÌËˇ")]
+    [Header("HUD –ü—Ä–∏—Ü–µ–ª–∏–≤–∞–Ω–∏—è")]
     public GameObject aimingHUD;
     public Slider powerSlider;
 
-    [Header("›Í‡Ì Á‡‚Â¯ÂÌËˇ")]
+    [Header("–≠–∫—Ä–∞–Ω –∑–∞–≤–µ—Ä—à–µ–Ω–∏—è")]
     public GameObject gameOverPanel;
     public TextMeshProUGUI winMessageText;
 
     public GameObject pocketPrompt;
+    private TextMeshProUGUI pocketPromptText;
 
 
     public GameObject pauseMenuPanel;
@@ -42,19 +46,48 @@ public class UIManager : MonoBehaviour
         if (Instance == null) Instance = this;
         else Destroy(gameObject);
 
+        if (aimingHUD != null) aimingHUD.SetActive(false);
         if (gameOverPanel != null) gameOverPanel.SetActive(false);
         if (pauseMenuPanel != null) pauseMenuPanel.SetActive(false);
+        if (pocketPrompt != null) pocketPromptText = pocketPrompt.GetComponentInChildren<TextMeshProUGUI>(true);
+        ResolvePlayerNameTexts();
+    }
+
+    private void OnEnable()
+    {
+        NetworkPlayer.PlayersChanged += RefreshPlayerNames;
+    }
+
+    private void OnDisable()
+    {
+        NetworkPlayer.PlayersChanged -= RefreshPlayerNames;
     }
 
     private void Start()
     {
         if (musicSlider != null) SetMusicVolume(musicSlider.value);
         if (sfxSlider != null) SetSFXVolume(sfxSlider.value);
+        RefreshPlayerNames();
     }
 
     public void SetPocketPromptVisible(bool visible)
     {
         if (pocketPrompt != null) pocketPrompt.SetActive(visible);
+    }
+
+    public void SetPocketPromptVisible(bool visible, bool localPlayerChoosing)
+    {
+        if (pocketPromptText == null && pocketPrompt != null)
+        {
+            pocketPromptText = pocketPrompt.GetComponentInChildren<TextMeshProUGUI>(true);
+        }
+
+        if (pocketPromptText != null)
+        {
+            pocketPromptText.text = localPlayerChoosing ? "–í—ã–±–µ—Ä–∏—Ç–µ –ª—É–∑—É" : "–ü—Ä–æ—Ç–∏–≤–Ω–∏–∫ –≤—ã–±–∏—Ä–∞–µ—Ç –ª—É–∑—É...";
+        }
+
+        SetPocketPromptVisible(visible);
     }
     public void TogglePause()
     {
@@ -69,7 +102,8 @@ public class UIManager : MonoBehaviour
     public void OnMainMenuClick()
     {
         Time.timeScale = 1f;
-        SceneManager.LoadScene("menu");
+        if (pauseMenuPanel != null) pauseMenuPanel.SetActive(false);
+        NetworkPlayer.RequestReturnToMenu();
     }
 
     public void OnResumeClick()
@@ -100,6 +134,7 @@ public class UIManager : MonoBehaviour
     {
         p1CanvasGroup.alpha = (currentPlayer == Player.Player1) ? 1f : 0.4f;
         p2CanvasGroup.alpha = (currentPlayer == Player.Player2) ? 1f : 0.4f;
+        RefreshPlayerNames();
     }
 
     public void AddBallToInventory(int ballNumber, Player pocketedBy)
@@ -115,6 +150,41 @@ public class UIManager : MonoBehaviour
             {
                 img.sprite = ballSprites[ballNumber - 1];
             }
+        }
+    }
+
+    public void SetBallInventory(IReadOnlyList<int> player1Balls, IReadOnlyList<int> player2Balls)
+    {
+        ClearBallInventory(p1BallContainer);
+        ClearBallInventory(p2BallContainer);
+
+        if (player1Balls != null)
+        {
+            foreach (int ballNumber in player1Balls)
+            {
+                AddBallToInventory(ballNumber, Player.Player1);
+            }
+        }
+
+        if (player2Balls != null)
+        {
+            foreach (int ballNumber in player2Balls)
+            {
+                AddBallToInventory(ballNumber, Player.Player2);
+            }
+        }
+    }
+
+    private void ClearBallInventory(RectTransform container)
+    {
+        if (container == null)
+        {
+            return;
+        }
+
+        for (int i = container.childCount - 1; i >= 0; i--)
+        {
+            Destroy(container.GetChild(i).gameObject);
         }
     }
 
@@ -142,20 +212,105 @@ public class UIManager : MonoBehaviour
 
             if (winMessageText != null)
             {
-                winMessageText.text = (winner == Player.Player1) ? "œŒ¡≈ƒ»À »√–Œ  1!" : "œŒ¡≈ƒ»À »√–Œ  2!";
+                winMessageText.text = $"–ü–û–ë–ï–î–ò–õ {GetPlayerDisplayName(winner).ToUpperInvariant()}!";
                 winMessageText.color = (winner == Player.Player1) ? Color.white : Color.yellow;
             }
         }
     }
 
+    public void ShowRestartVoteStatus(int readyCount, int requiredCount)
+    {
+        if (gameOverPanel != null)
+        {
+            gameOverPanel.SetActive(true);
+        }
+
+        if (winMessageText != null)
+        {
+            winMessageText.text = $"–ù–û–í–ê–Ø –ò–ì–†–ê: {readyCount}/{requiredCount}";
+            winMessageText.color = Color.white;
+        }
+    }
+
     public void OnRestartBtnClick()
     {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        Time.timeScale = 1f;
+        NetworkPlayer.RequestRestartMatch();
     }
 
     public void OnMainMenuBtnClick()
     {
-        SceneManager.LoadScene("menu");
+        Time.timeScale = 1f;
+        NetworkPlayer.RequestReturnToMenu();
+    }
+
+    private void RefreshPlayerNames()
+    {
+        ResolvePlayerNameTexts();
+
+        if (p1NameText != null)
+        {
+            p1NameText.text = GetPlayerDisplayName(Player.Player1);
+        }
+
+        if (p2NameText != null)
+        {
+            p2NameText.text = GetPlayerDisplayName(Player.Player2);
+        }
+    }
+
+    private string GetPlayerDisplayName(Player player)
+    {
+        int slotIndex = player == Player.Player1 ? 0 : 1;
+        if (NetworkPlayer.TryGetClientIdForPlayerSlot(slotIndex, out ulong clientId))
+        {
+            foreach (NetworkPlayer networkPlayer in NetworkPlayer.All)
+            {
+                if (networkPlayer != null && networkPlayer.OwnerClientId == clientId)
+                {
+                    return string.IsNullOrWhiteSpace(networkPlayer.Nickname)
+                        ? $"–ò–≥—Ä–æ–∫ {slotIndex + 1}"
+                        : networkPlayer.Nickname;
+                }
+            }
+        }
+
+        return $"–ò–≥—Ä–æ–∫ {slotIndex + 1}";
+    }
+
+    private void ResolvePlayerNameTexts()
+    {
+        if (p1NameText == null)
+        {
+            p1NameText = FindNameTextInPanel(p1CanvasGroup, "Player 1", "P1", "p1");
+        }
+
+        if (p2NameText == null)
+        {
+            p2NameText = FindNameTextInPanel(p2CanvasGroup, "Player 2", "P2", "p2");
+        }
+    }
+
+    private TextMeshProUGUI FindNameTextInPanel(CanvasGroup panel, params string[] expectedTexts)
+    {
+        if (panel == null)
+        {
+            return null;
+        }
+
+        TextMeshProUGUI[] texts = panel.GetComponentsInChildren<TextMeshProUGUI>(true);
+        foreach (TextMeshProUGUI text in texts)
+        {
+            foreach (string expectedText in expectedTexts)
+            {
+                if (string.Equals(text.text.Trim(), expectedText, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return text;
+                }
+            }
+        }
+
+        return texts.Length > 0 ? texts[0] : null;
     }
 
 }

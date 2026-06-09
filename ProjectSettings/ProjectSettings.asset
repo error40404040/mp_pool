@@ -924,11 +924,11 @@ PlayerSettings:
   captureStartupLogs: {}
   activeInputHandler: 1
   windowsGamepadBackendHint: 0
-  cloudProjectId: f090e0d2-6dcc-449d-8a2a-35a0e7fbe89b
+  cloudProjectId: 4bbf2071-69ae-4c00-9e2d-07bbd06dfc86
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
   projectName: pool
-  organizationId: dosava200527
+  organizationId: makili1
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}

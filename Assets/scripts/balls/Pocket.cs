@@ -1,5 +1,6 @@
-using UnityEngine;
+п»їusing UnityEngine;
 using System.Collections.Generic;
+using Unity.Netcode;
 
 [RequireComponent(typeof(Collider))]
 public class Pocket : MonoBehaviour
@@ -18,6 +19,8 @@ public class Pocket : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        if (IsNetworkClientOnly()) return;
+
         if (other.CompareTag("Ball") && !scoredBallsThisTurn.Contains(other.gameObject))
         {
             ScoreBall(other.gameObject);
@@ -33,7 +36,6 @@ public class Pocket : MonoBehaviour
         {
             SoundManager.Instance.PlayPocketSound();
         }
-        // передаем информацию о шаре и ссылку на лузу 
         GameManager.Instance.BallPocketed(ballInfo, this);
 
         if (ballInfo.type == BallInfo.BallType.CueBall) return;
@@ -51,6 +53,17 @@ public class Pocket : MonoBehaviour
         MeshRenderer visualModel = ball.GetComponentInChildren<MeshRenderer>();
         if (visualModel != null) visualModel.enabled = false;
 
+        if (NetworkBallSync.Instance != null)
+        {
+            NetworkBallSync.Instance.BroadcastNow();
+        }
+
         Destroy(ball, 2f);
+    }
+
+    private static bool IsNetworkClientOnly()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsListening && networkManager.IsClient && !networkManager.IsServer;
     }
 }

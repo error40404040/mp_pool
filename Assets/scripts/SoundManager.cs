@@ -1,21 +1,21 @@
-using UnityEngine;
+п»їusing UnityEngine;
 using UnityEngine.Audio;
 
 public class SoundManager : MonoBehaviour
 {
     public static SoundManager Instance { get; private set; }
 
-    [Header("Группы микшера")]
+    [Header("Р“СЂСѓРїРїС‹ РјРёРєС€РµСЂР°")]
     public AudioMixerGroup musicGroup;
     public AudioMixerGroup sfxGroup;
 
-    [Header("Звуки")]
+    [Header("Р—РІСѓРєРё")]
     public AudioClip[] ballHitClips;
     public AudioClip wallHitClip;
     public AudioClip pocketClip;
     public AudioClip cueStrikeClip;
 
-    [Header("Музыка")]
+    [Header("РњСѓР·С‹РєР°")]
     public AudioClip backgroundMusic;
 
     private AudioSource musicSource;
@@ -50,7 +50,6 @@ public class SoundManager : MonoBehaviour
         if (musicSource.clip != null) musicSource.Play();
     }
 
-    // метод для рандомайза pitch у звуков
     private void PlayRandomized(AudioClip clip, float volume)
     {
         if (clip == null) return;
@@ -58,14 +57,12 @@ public class SoundManager : MonoBehaviour
         sfxSource.PlayOneShot(clip, Mathf.Clamp01(volume));
     }
 
-    // Volume = Lerp(0.2, 1.0, t), t = currentPower / maxPower.
     public void PlayCueStrike(float power, float maxPower)
     {
         float volume = Mathf.Lerp(0.2f, 1.0f, power / maxPower);
         PlayRandomized(cueStrikeClip, volume);
     }
 
-    // считаем громкость удара в зависимости от импульса
     public void PlayBallCollision(float impulseMagnitude)
     {
         if (ballHitClips.Length == 0) return;
@@ -76,7 +73,6 @@ public class SoundManager : MonoBehaviour
         PlayRandomized(clip, volume);
     }
 
-    // звук удара о борт (от скорости)
     public void PlayWallCollision(float speed)
     {
         float volume = speed / 5f;

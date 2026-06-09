@@ -1,13 +1,13 @@
-using UnityEngine;
+п»їusing UnityEngine;
 
 public class AimingAssistance : MonoBehaviour
 {
-    [Header("Ссылки")]
+    [Header("РЎСЃС‹Р»РєРё")]
     public LineRenderer trajectoryLine; 
     public LineRenderer reflectionLine; 
     public Transform cueBall;
 
-    [Header("Настройки")]
+    [Header("РќР°СЃС‚СЂРѕР№РєРё")]
     public float maxPredictionLength = 10f;
     public float reflectionLength = 0.5f; 
 
@@ -19,12 +19,32 @@ public class AimingAssistance : MonoBehaviour
     private void Awake()
     {
         cueController = GetComponent<CueController>();
+        if (cueBall == null)
+        {
+            return;
+        }
+
         cueBallPhysics = cueBall.GetComponent<BallPhysics>();
-        cueBallRadius = cueBall.GetComponent<SphereCollider>().radius * cueBall.transform.localScale.x;
+        SphereCollider cueBallCollider = cueBall.GetComponent<SphereCollider>();
+        if (cueBallCollider != null)
+        {
+            cueBallRadius = cueBallCollider.radius * cueBall.transform.localScale.x;
+        }
     }
 
     private void Update()
     {
+        if (!CanShowAimingLines())
+        {
+            if (linesAreActive)
+            {
+                linesAreActive = false;
+                HideLines();
+            }
+
+            return;
+        }
+
         if (GameManager.Instance.CurrentState == GameState.PlayerAiming)
         {
             if (!linesAreActive) linesAreActive = true;
@@ -39,10 +59,14 @@ public class AimingAssistance : MonoBehaviour
 
     private void UpdateLines()
     {
+        if (trajectoryLine == null || reflectionLine == null || cueController == null || cueBall == null || cueBallPhysics == null)
+        {
+            return;
+        }
+
         trajectoryLine.enabled = true;
         reflectionLine.enabled = false; 
 
-        // Берем реальное направление удара
         Vector3 strikePosition = cueController.GetLastAimedPoint();
         Vector3 actualStrikeDir = (strikePosition - transform.position).normalized;
         Vector3 flatDir = new Vector3(actualStrikeDir.x, 0, actualStrikeDir.z).normalized;
@@ -50,12 +74,10 @@ public class AimingAssistance : MonoBehaviour
         Transform closestBall = null;
         float minHitDist = maxPredictionLength;
 
-        // проверка пересечение луча с шаром 
         foreach (BallPhysics other in BallPhysics.allBalls)
         {
             if (other == cueBallPhysics || other == null) continue;
 
-            // нахождение точки пересечения
             Vector3 toOther = other.transform.position - cueBall.position;
             toOther.y = 0;
 
@@ -63,29 +85,28 @@ public class AimingAssistance : MonoBehaviour
             if (t < 0) continue; 
 
             float d2 = toOther.sqrMagnitude - t * t;
-            float otherR = other.GetComponent<SphereCollider>().radius * other.transform.localScale.x;
+            SphereCollider otherCollider = other.GetComponent<SphereCollider>();
+            if (otherCollider == null) continue;
+
+            float otherR = otherCollider.radius * other.transform.localScale.x;
             float combinedR = cueBallRadius + otherR;
 
             if (d2 >= combinedR * combinedR) continue;
 
-            // дистанция до точки 
             float t_offset = Mathf.Sqrt(combinedR * combinedR - d2);
             float hitDist = t - t_offset;
 
-            // ищем ближний шар 
             if (hitDist < minHitDist) { minHitDist = hitDist; closestBall = other.transform; }
         }
 
         RaycastHit wallHit;
         if (Physics.Raycast(cueBall.position, flatDir, out wallHit, minHitDist, cueBallPhysics.wallLayer))
         {
-            // стена ближе чем шар
             trajectoryLine.SetPosition(0, cueBall.position);
             trajectoryLine.SetPosition(1, wallHit.point);
         }
         else if (closestBall != null)
         {
-            // конечная точка основной линии - проекция центра цели на линию удара
             Vector3 toTarget = closestBall.position - cueBall.position;
             Vector3 projectionPoint = cueBall.position + Vector3.Project(toTarget, flatDir);
             trajectoryLine.SetPosition(0, cueBall.position);
@@ -93,10 +114,8 @@ public class AimingAssistance : MonoBehaviour
 
             reflectionLine.enabled = true;
 
-            // позиция центра битка в момент контакта
             Vector3 cueBallHitCenter = cueBall.position + flatDir * minHitDist;
 
-            // направление отскока = вектор соединяющий центры шаров 
             Vector3 bounceDir = (closestBall.position - cueBallHitCenter);
             bounceDir.y = 0;
             bounceDir.Normalize();
@@ -113,7 +132,19 @@ public class AimingAssistance : MonoBehaviour
 
     private void HideLines()
     {
-        trajectoryLine.enabled = false;
-        reflectionLine.enabled = false;
+        if (trajectoryLine != null) trajectoryLine.enabled = false;
+        if (reflectionLine != null) reflectionLine.enabled = false;
+    }
+
+    private bool CanShowAimingLines()
+    {
+        return GameManager.Instance != null
+            && GameManager.Instance.CurrentState == GameState.PlayerAiming
+            && cueController != null
+            && cueController.CanLocalControlCue()
+            && cueBall != null
+            && cueBallPhysics != null
+            && trajectoryLine != null
+            && reflectionLine != null;
     }
 }

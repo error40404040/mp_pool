@@ -1,10 +1,11 @@
-using UnityEngine;
+п»їusing UnityEngine;
 using System.Collections.Generic;
+using Unity.Netcode;
 
 [RequireComponent(typeof(Rigidbody))]
 public class BallPhysics : MonoBehaviour
 {
-    [Header("Физические свойства")]
+    [Header("Р¤РёР·РёС‡РµСЃРєРёРµ СЃРІРѕР№СЃС‚РІР°")]
     [Range(0f, 1f)] public float rollingFrictionCoefficient = 0.01f;
     [Range(0f, 1f)] public float ballBounciness = 0.95f;
     [Range(0f, 1f)] public float wallBounciness = 0.8f;
@@ -14,7 +15,6 @@ public class BallPhysics : MonoBehaviour
     [HideInInspector] public Rigidbody rb;
     private SphereCollider sphereCollider;
     private float radius;
-    private float gravityMagnitude;
     private float initialFixedY;
 
     public static List<BallPhysics> allBalls = new List<BallPhysics>();
@@ -23,10 +23,11 @@ public class BallPhysics : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
         sphereCollider = GetComponent<SphereCollider>();
-        gravityMagnitude = Physics.gravity.magnitude;
-        // Реальный радиус с учетом скейла
         radius = sphereCollider.radius * transform.localScale.x;
         initialFixedY = transform.position.y;
+
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
     }
 
     private void OnEnable() { if (!allBalls.Contains(this)) allBalls.Add(this); }
@@ -34,12 +35,13 @@ public class BallPhysics : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (IsNetworkClientOnly()) return;
         if (rb.isKinematic) return;
 
-        // Лочим высоту 
         transform.position = new Vector3(transform.position.x, initialFixedY, transform.position.z);
 
         PredictiveWallCollision();
+        PredictiveBallCollisions();
 
         ResolveBallCollisions();
         ResolveWallCollisions();
@@ -47,7 +49,6 @@ public class BallPhysics : MonoBehaviour
         ApplyRollingFriction();
     }
 
-    // Защита от пролета стен 
     private void PredictiveWallCollision()
     {
         Vector3 velocity = rb.linearVelocity;
@@ -55,17 +56,13 @@ public class BallPhysics : MonoBehaviour
 
         if (speed < 0.1f) return;
 
-        // Дистанция = V * dt
         float frameDistance = speed * Time.fixedDeltaTime;
         Vector3 direction = velocity.normalized;
 
-        // Кидаем сферу вперед. Если попали - отражаем вручную
         if (Physics.SphereCast(transform.position, radius, direction, out RaycastHit hit, frameDistance, wallLayer))
         {
-            // Формула отражения: V' = V - 2*(V*N)*N
             float velocityDotNormal = Vector3.Dot(velocity, hit.normal);
 
-            // Применяем формулу: V_new = V_old - 2 * (V_old . N) * N
             Vector3 reflectedVelocity = velocity - 2 * velocityDotNormal * hit.normal; reflectedVelocity.y = 0;
             rb.linearVelocity = reflectedVelocity * wallBounciness;
 
@@ -76,11 +73,64 @@ public class BallPhysics : MonoBehaviour
 
             transform.position = hit.point + hit.normal * (radius + 0.001f);
 
-            Debug.Log($"Предотвращен пролет сквозь стену: {gameObject.name}");
         }
     }
 
-    // Обработка касания стен (если скорость маленькая или уже внутри)
+    private void PredictiveBallCollisions()
+    {
+        foreach (BallPhysics otherBall in allBalls)
+        {
+            if (otherBall == this || otherBall == null || otherBall.GetInstanceID() <= this.GetInstanceID()) continue;
+            if (otherBall.rb == null || otherBall.rb.isKinematic) continue;
+
+            Vector2 pos1 = new Vector2(transform.position.x, transform.position.z);
+            Vector2 pos2 = new Vector2(otherBall.transform.position.x, otherBall.transform.position.z);
+            Vector2 relativePosition = pos1 - pos2;
+            Vector2 relativeVelocity = new Vector2(rb.linearVelocity.x - otherBall.rb.linearVelocity.x, rb.linearVelocity.z - otherBall.rb.linearVelocity.z);
+
+            float combinedRadius = radius + otherBall.radius;
+            float combinedRadiusSqr = combinedRadius * combinedRadius;
+            if (relativePosition.sqrMagnitude <= combinedRadiusSqr)
+            {
+                continue;
+            }
+
+            float a = Vector2.Dot(relativeVelocity, relativeVelocity);
+            if (a < 0.0001f)
+            {
+                continue;
+            }
+
+            float b = 2f * Vector2.Dot(relativePosition, relativeVelocity);
+            if (b >= 0f)
+            {
+                continue;
+            }
+
+            float c = Vector2.Dot(relativePosition, relativePosition) - combinedRadiusSqr;
+            float discriminant = b * b - 4f * a * c;
+            if (discriminant < 0f)
+            {
+                continue;
+            }
+
+            float timeOfImpact = (-b - Mathf.Sqrt(discriminant)) / (2f * a);
+            if (timeOfImpact < 0f || timeOfImpact > Time.fixedDeltaTime)
+            {
+                continue;
+            }
+
+            Vector2 impactOffset = relativePosition + relativeVelocity * timeOfImpact;
+            if (impactOffset.sqrMagnitude < 0.0001f)
+            {
+                impactOffset = relativePosition.normalized * combinedRadius;
+            }
+
+            Vector3 collisionNormal = new Vector3(impactOffset.x, 0f, impactOffset.y).normalized;
+            ApplyBallCollisionImpulse(otherBall, collisionNormal);
+        }
+    }
+
     private void ResolveWallCollisions()
     {
         Collider[] hitWalls = Physics.OverlapSphere(transform.position, radius, wallLayer);
@@ -94,14 +144,11 @@ public class BallPhysics : MonoBehaviour
             Vector3 normal = diff.normalized;
             float distance = diff.magnitude;
 
-            // Если внутри
             if (distance < radius)
             {
-                // Выталкиваем: Pos += Normal * (R - dist)
                 float penetration = radius - distance;
                 transform.position += normal * penetration;
 
-                // Если летит в стену - отражаем
                 if (Vector3.Dot(rb.linearVelocity, normal) < 0)
                 {
                     if (SoundManager.Instance != null)
@@ -110,7 +157,6 @@ public class BallPhysics : MonoBehaviour
                     }
                     Vector3 incomingVelocity = rb.linearVelocity;
 
-                    // R = V - 2*(V.N)*N
                     float dot = Vector3.Dot(incomingVelocity, normal);
                     Vector3 reflectedVelocity = incomingVelocity - 2 * dot * normal;
 
@@ -125,7 +171,6 @@ public class BallPhysics : MonoBehaviour
     {
         foreach (BallPhysics otherBall in allBalls)
         {
-            // Пропускаем себя и дубликаты 
             if (otherBall == this || otherBall == null || otherBall.GetInstanceID() <= this.GetInstanceID()) continue;
 
             Vector2 pos1 = new Vector2(transform.position.x, transform.position.z);
@@ -133,14 +178,12 @@ public class BallPhysics : MonoBehaviour
             float dist = Vector2.Distance(pos1, pos2);
             float combinedRadius = radius + otherBall.radius;
 
-            // Есть пересечение
             if (dist < combinedRadius)
             {
                 Vector3 collisionNormal = (transform.position - otherBall.transform.position);
                 collisionNormal.y = 0;
                 collisionNormal.Normalize();
 
-                // Разделение позиций пропорционально массе чтобы шары не слипались
                 float penetration = combinedRadius - dist;
                 float totalMass = rb.mass + otherBall.rb.mass;
                 Vector3 moveVec = collisionNormal * penetration;
@@ -148,35 +191,42 @@ public class BallPhysics : MonoBehaviour
                 transform.position += new Vector3(moveVec.x * (otherBall.rb.mass / totalMass), 0, moveVec.z * (otherBall.rb.mass / totalMass));
                 otherBall.transform.position -= new Vector3(moveVec.x * (rb.mass / totalMass), 0, moveVec.z * (rb.mass / totalMass));
 
-                // Расчет импульса
                 Vector3 relativeVelocity = rb.linearVelocity - otherBall.rb.linearVelocity;
-                // Проекция Vrel на нормаль (линию удара)
                 float velocityAlongNormal = Vector3.Dot(relativeVelocity, collisionNormal);
 
                 if (velocityAlongNormal > 0) continue;
 
-                // Расчет скалярного импульса J (J = -(1 + e) * Vrel_n / (1/m1 + 1/m2))
-                float j = -(1 + ballBounciness) * velocityAlongNormal;
-                j /= (1 / rb.mass + 1 / otherBall.rb.mass);
-                // Получение вектора импульса (J * n)
-                Vector3 impulse = j * collisionNormal;
-
-                if (SoundManager.Instance != null)
-                {
-                    SoundManager.Instance.PlayBallCollision(impulse.magnitude);
-                }
-
-                // Применяем импульс: V' = V + j/m
-                rb.linearVelocity += impulse / rb.mass;
-                otherBall.rb.linearVelocity -= impulse / otherBall.rb.mass;
-
-                rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
-                otherBall.rb.linearVelocity = new Vector3(otherBall.rb.linearVelocity.x, 0, otherBall.rb.linearVelocity.z);
+                ApplyBallCollisionImpulse(otherBall, collisionNormal);
             }
         }
     }
 
-    // Трение качения
+    private void ApplyBallCollisionImpulse(BallPhysics otherBall, Vector3 collisionNormal)
+    {
+        Vector3 relativeVelocity = rb.linearVelocity - otherBall.rb.linearVelocity;
+        float velocityAlongNormal = Vector3.Dot(relativeVelocity, collisionNormal);
+
+        if (velocityAlongNormal > 0f)
+        {
+            return;
+        }
+
+        float impulseMagnitude = -(1f + ballBounciness) * velocityAlongNormal;
+        impulseMagnitude /= (1f / rb.mass + 1f / otherBall.rb.mass);
+        Vector3 impulse = impulseMagnitude * collisionNormal;
+
+        if (SoundManager.Instance != null)
+        {
+            SoundManager.Instance.PlayBallCollision(impulse.magnitude);
+        }
+
+        rb.linearVelocity += impulse / rb.mass;
+        otherBall.rb.linearVelocity -= impulse / otherBall.rb.mass;
+
+        rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z);
+        otherBall.rb.linearVelocity = new Vector3(otherBall.rb.linearVelocity.x, 0f, otherBall.rb.linearVelocity.z);
+    }
+
     private void ApplyRollingFriction()
     {
         if (rb.linearVelocity.sqrMagnitude < 0.0001f)
@@ -186,17 +236,18 @@ public class BallPhysics : MonoBehaviour
             return;
         }
 
-        // N = m * g (Нормальная сила)
         float N = rb.mass * Physics.gravity.magnitude;
 
-        // v_hat - Вектор направления скорости
         Vector3 velocityDirection = rb.linearVelocity.normalized;
 
-        // Вектор силы трения F_fr = -mu * N * v_hat
         Vector3 frictionForce = -rollingFrictionCoefficient * N * velocityDirection;
 
         rb.AddForce(frictionForce, ForceMode.Force);
     }
 
-    
+    private static bool IsNetworkClientOnly()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsListening && networkManager.IsClient && !networkManager.IsServer;
+    }
 }

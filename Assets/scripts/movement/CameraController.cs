@@ -1,23 +1,23 @@
-using UnityEngine;
+п»їusing UnityEngine;
 using UnityEngine.InputSystem;
 
 public class CameraController : MonoBehaviour
 {
-    [Header("Ссылки")]
+    [Header("РЎСЃС‹Р»РєРё")]
     public Transform cue;
     public Transform cueBall;
     public CueController cueController;
 
-    [Header("Точка над столом")]
+    [Header("РўРѕС‡РєР° РЅР°Рґ СЃС‚РѕР»РѕРј")]
     public Transform topDownViewPoint; 
     public float transitionSpeed = 5f; 
 
-    [Header("Прицеливание")]
+    [Header("РџСЂРёС†РµР»РёРІР°РЅРёРµ")]
     public float distanceBehindCue = 0.5f; 
     public float heightAboveCue = 0.1f;    
     public float smoothSpeed = 10f;        
 
-    [Header("Зум")]
+    [Header("Р—СѓРј")]
     public float zoomSpeed = 20f;
     public float minZoomDistance = 0.2f;
     public float maxZoomDistance = 1.0f;
@@ -35,26 +35,29 @@ public class CameraController : MonoBehaviour
 
     void LateUpdate()
     {
+        if (GameManager.Instance == null)
+        {
+            return;
+        }
+
         GameState state = GameManager.Instance.CurrentState;
 
-        if (state == GameState.PlayerAiming)
+        if (state == GameState.PlayerAiming && CanUseAimingCamera())
         {
             if (cue == null || cueBall == null || cueController == null) return;
 
             float zoomInput = controls.Gameplay.CameraZoom.ReadValue<float>() * 0.01f;
-            // V_new = V_old - V_input * speed * dt
             currentDistance -= zoomInput * zoomSpeed * Time.deltaTime;
             currentDistance = Mathf.Clamp(currentDistance, minZoomDistance, maxZoomDistance);
 
             Vector3 desiredPosition = cue.position;
-            // desiredPosition = CuePos - AimDir * Distance + Y_Offset
             desiredPosition -= cueController.AimDirection * currentDistance;
             desiredPosition += Vector3.up * heightAboveCue;
 
             transform.position = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed * Time.deltaTime);
             transform.LookAt(cueBall); 
         }
-        else if (state == GameState.BallsMoving || state == GameState.PlacingCueBall ||
+        else if (state == GameState.PlayerAiming || state == GameState.BallsMoving || state == GameState.PlacingCueBall ||
                  state == GameState.SelectingPocket || state == GameState.GameOver)
         {
             if (topDownViewPoint == null) return;
@@ -77,5 +80,10 @@ public class CameraController : MonoBehaviour
 
         transform.position = desiredPosition;
         transform.LookAt(cueBall);
+    }
+
+    private bool CanUseAimingCamera()
+    {
+        return cueController == null || cueController.CanLocalControlCue();
     }
 }
