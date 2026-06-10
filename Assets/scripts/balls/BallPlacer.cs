@@ -23,7 +23,7 @@ public class BallPlacer : MonoBehaviour
     private bool isValidPosition = false;
     private bool preparedForPlacement = false;
     private float nextPreviewSyncTime = 0f;
-    private const float previewSyncInterval = 0.05f;
+    private const float previewSyncInterval = 0.1f;
 
     private void Awake()
     {

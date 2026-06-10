@@ -35,10 +35,13 @@ public class NetworkConnectionMenu : MonoBehaviour
     [SerializeField] private string defaultNickname = "Player";
     [SerializeField] private int maxRelayConnections = 1;
     [SerializeField] private string relayConnectionType = "dtls";
+    [SerializeField] private string relayRegion = "";
 
     private readonly StringBuilder playersBuilder = new StringBuilder();
     private bool isStarting;
     private string currentJoinCode;
+    private string currentRelayRegion;
+    private int networkStartVersion;
 
     private void Awake()
     {
@@ -81,44 +84,23 @@ public class NetworkConnectionMenu : MonoBehaviour
 
     public void Disconnect()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-        {
-            NetworkManager.Singleton.Shutdown();
-        }
-
-        currentJoinCode = null;
-        NetworkClientData.RelayJoinCode = null;
-        isStarting = false;
-        RefreshView("Disconnected");
-        if (menuNavigator != null)
-        {
-            menuNavigator.ShowMenu();
-        }
+        ResetNetworkSession(showMainMenu: true);
     }
 
     public void BackToMultiplayerMenu()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-        {
-            NetworkManager.Singleton.Shutdown();
-        }
-
-        currentJoinCode = null;
-        NetworkClientData.RelayJoinCode = null;
-        isStarting = false;
-        RefreshView("Disconnected");
-        ResolveMenuNavigator();
-        if (menuNavigator != null)
-        {
-            menuNavigator.ShowMultiplayerMenu();
-        }
+        ResetNetworkSession(showMainMenu: false);
     }
 
     private void ApplyDefaultInputValues()
     {
-        if (nicknameInput != null && string.IsNullOrWhiteSpace(nicknameInput.text))
+        if (nicknameInput != null)
         {
-            nicknameInput.text = defaultNickname;
+            nicknameInput.characterLimit = 10;
+            if (string.IsNullOrWhiteSpace(nicknameInput.text))
+            {
+                nicknameInput.text = defaultNickname;
+            }
         }
 
         if (codeInput != null)
@@ -139,6 +121,7 @@ public class NetworkConnectionMenu : MonoBehaviour
 
     private async Task StartHostWithRelayAsync()
     {
+        int startVersion = ++networkStartVersion;
         if (!TryBeginNetworkStart("Starting Relay host..."))
         {
             return;
@@ -148,15 +131,32 @@ public class NetworkConnectionMenu : MonoBehaviour
         try
         {
             UnityTransport transport = await PrepareRelayTransportAsync();
-            Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxRelayConnections);
+            Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxRelayConnections, GetPreferredRelayRegion());
             transport.SetRelayServerData(AllocationUtils.ToRelayServerData(allocation, relayConnectionType));
+            currentRelayRegion = allocation.Region;
             currentJoinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+
+            if (startVersion != networkStartVersion)
+            {
+                return;
+            }
+
             NetworkClientData.RelayJoinCode = currentJoinCode;
             GUIUtility.systemCopyBuffer = currentJoinCode;
 
             started = NetworkManager.Singleton.StartHost();
+            if (startVersion != networkStartVersion)
+            {
+                if (started && NetworkManager.Singleton != null)
+                {
+                    NetworkManager.Singleton.Shutdown();
+                }
+
+                return;
+            }
+
             isStarting = false;
-            RefreshView(started ? $"Relay Host code: {currentJoinCode}" : "Relay host start failed");
+            RefreshView(started ? $"Relay Host code: {currentJoinCode} | Region: {GetRelayRegionLabel()}" : "Relay host start failed");
 
             if (started && menuNavigator != null)
             {
@@ -165,6 +165,11 @@ public class NetworkConnectionMenu : MonoBehaviour
         }
         catch (Exception ex)
         {
+            if (startVersion != networkStartVersion)
+            {
+                return;
+            }
+
             currentJoinCode = null;
             isStarting = false;
             RefreshView($"Relay host failed: {ex.Message}");
@@ -178,6 +183,7 @@ public class NetworkConnectionMenu : MonoBehaviour
 
     private async Task StartClientWithRelayAsync()
     {
+        int startVersion = ++networkStartVersion;
         if (!TryBeginNetworkStart("Joining Relay..."))
         {
             return;
@@ -197,12 +203,29 @@ public class NetworkConnectionMenu : MonoBehaviour
             UnityTransport transport = await PrepareRelayTransportAsync();
             JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
             transport.SetRelayServerData(AllocationUtils.ToRelayServerData(allocation, relayConnectionType));
+            currentRelayRegion = allocation.Region;
             currentJoinCode = joinCode;
+
+            if (startVersion != networkStartVersion)
+            {
+                return;
+            }
+
             NetworkClientData.RelayJoinCode = joinCode;
 
             started = NetworkManager.Singleton.StartClient();
+            if (startVersion != networkStartVersion)
+            {
+                if (started && NetworkManager.Singleton != null)
+                {
+                    NetworkManager.Singleton.Shutdown();
+                }
+
+                return;
+            }
+
             isStarting = false;
-            RefreshView(started ? $"Relay client joining: {joinCode}" : "Relay client start failed");
+            RefreshView(started ? $"Relay client joining: {joinCode} | Region: {GetRelayRegionLabel()}" : "Relay client start failed");
 
             if (started && menuNavigator != null)
             {
@@ -211,6 +234,11 @@ public class NetworkConnectionMenu : MonoBehaviour
         }
         catch (Exception ex)
         {
+            if (startVersion != networkStartVersion)
+            {
+                return;
+            }
+
             currentJoinCode = null;
             isStarting = false;
             RefreshView($"Relay join failed: {ex.Message}");
@@ -250,6 +278,33 @@ public class NetworkConnectionMenu : MonoBehaviour
         isStarting = true;
         RefreshView(status);
         return true;
+    }
+
+    private void ResetNetworkSession(bool showMainMenu)
+    {
+        networkStartVersion++;
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        currentJoinCode = null;
+        currentRelayRegion = null;
+        NetworkClientData.RelayJoinCode = null;
+        isStarting = false;
+
+        ResolveMenuNavigator();
+        if (menuNavigator != null && showMainMenu)
+        {
+            menuNavigator.ShowMenu();
+        }
+        else if (menuNavigator != null)
+        {
+            menuNavigator.ShowMultiplayerMenu();
+        }
+
+        RefreshView("Disconnected", forceDisconnected: true);
     }
 
     private async Task<UnityTransport> PrepareRelayTransportAsync()
@@ -370,16 +425,26 @@ public class NetworkConnectionMenu : MonoBehaviour
         {
             return string.IsNullOrEmpty(currentJoinCode)
                 ? "Relay host running"
-                : $"Relay Host code: {currentJoinCode}";
+                : $"Relay Host code: {currentJoinCode} | Region: {GetRelayRegionLabel()}";
         }
 
-        return networkManager.IsClient ? "Relay client connected" : "Connected";
+        return networkManager.IsClient ? $"Relay client connected | Region: {GetRelayRegionLabel()}" : "Connected";
     }
 
-    private void RefreshView(string status)
+    private string GetPreferredRelayRegion()
+    {
+        return string.IsNullOrWhiteSpace(relayRegion) ? null : relayRegion.Trim();
+    }
+
+    private string GetRelayRegionLabel()
+    {
+        return string.IsNullOrWhiteSpace(currentRelayRegion) ? "auto" : currentRelayRegion;
+    }
+
+    private void RefreshView(string status, bool forceDisconnected = false)
     {
         NetworkManager networkManager = NetworkManager.Singleton;
-        bool isConnected = networkManager != null && networkManager.IsListening;
+        bool isConnected = !forceDisconnected && networkManager != null && networkManager.IsListening;
 
         if (statusText != null)
         {
@@ -410,7 +475,7 @@ public class NetworkConnectionMenu : MonoBehaviour
 
         if (disconnectButton != null)
         {
-            disconnectButton.interactable = isConnected;
+            disconnectButton.interactable = !isStarting;
         }
     }
 

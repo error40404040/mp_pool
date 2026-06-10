@@ -203,7 +203,7 @@ public class NetworkPlayer : NetworkBehaviour
         }
     }
 
-    [ClientRpc]
+    [ClientRpc(Delivery = RpcDelivery.Unreliable)]
     public void SyncBallStatesClientRpc(NetworkBallState[] states)
     {
         if (NetworkBallSync.Instance == null)
@@ -229,7 +229,7 @@ public class NetworkPlayer : NetworkBehaviour
         }
     }
 
-    [ClientRpc]
+    [ClientRpc(Delivery = RpcDelivery.Unreliable)]
     public void SyncCueTransformClientRpc(Vector3 position, Quaternion rotation)
     {
         if (CueController.Instance == null)
@@ -255,7 +255,7 @@ public class NetworkPlayer : NetworkBehaviour
         }
     }
 
-    [ClientRpc]
+    [ClientRpc(Delivery = RpcDelivery.Unreliable)]
     public void SyncCueBallPreviewClientRpc(Vector3 position)
     {
         if (GameManager.Instance == null)

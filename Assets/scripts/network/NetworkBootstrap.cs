@@ -51,6 +51,11 @@ public static class NetworkBootstrap
         transport.ConnectionData.Address = "127.0.0.1";
         transport.ConnectionData.Port = 7777;
 
+        if (networkManager.NetworkConfig == null)
+        {
+            networkManager.NetworkConfig = new NetworkConfig();
+        }
+
         networkManager.NetworkConfig.NetworkTransport = transport;
         networkManager.NetworkConfig.EnableSceneManagement = false;
         networkManager.NetworkConfig.ConnectionApproval = false;

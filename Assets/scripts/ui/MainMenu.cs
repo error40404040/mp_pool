@@ -4,6 +4,9 @@ using UnityEngine.Audio;
 
 public class MainMenuController : MonoBehaviour
 {
+    private const string MusicVolumeKey = "MusicVolume";
+    private const string SfxVolumeKey = "SFXVolume";
+
     [Header("Настройки")]
     public string gameSceneName = "SampleScene";
 
@@ -19,10 +22,8 @@ public class MainMenuController : MonoBehaviour
 
         if (mainMixer != null)
         {
-            float dB = Mathf.Log10(startVolume) * 20;
-
-            mainMixer.SetFloat("MusicVol", dB);
-            mainMixer.SetFloat("SFXVol", dB);
+            ApplyMixerVolume("MusicVol", PlayerPrefs.GetFloat(MusicVolumeKey, startVolume));
+            ApplyMixerVolume("SFXVol", PlayerPrefs.GetFloat(SfxVolumeKey, startVolume));
         }
     }
 
@@ -34,5 +35,11 @@ public class MainMenuController : MonoBehaviour
     public void QuitGame()
     {
         Application.Quit();
+    }
+
+    private void ApplyMixerVolume(string exposedParameter, float sliderValue)
+    {
+        float dB = Mathf.Log10(Mathf.Clamp(sliderValue, 0.0001f, 1f)) * 20;
+        mainMixer.SetFloat(exposedParameter, dB);
     }
 }

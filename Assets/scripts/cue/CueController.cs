@@ -43,7 +43,7 @@ public class CueController : MonoBehaviour
     private Quaternion remoteCueRotation;
     private float nextCueSyncTime;
     private bool hasRemoteCueTransform = false;
-    private const float cueSyncInterval = 0.05f;
+    private const float cueSyncInterval = 0.08f;
 
     private PlayerControls controls;
 
@@ -204,37 +204,49 @@ public class CueController : MonoBehaviour
         Vector3 position = cueBall.position - AimDirection * (baseOffsetFromBall + pullback);
         transform.position = position;
 
-        Vector3 pointToLookAt = lastAimedPoint;
+        Vector3 pointToLookAt = GetCurrentAimedPoint();
+        lastAimedPoint = pointToLookAt;
+
         if (strikePointVisualizer != null && strikePointVisualizer.gameObject.activeSelf)
         {
-            SphereCollider cueBallCollider = cueBall.GetComponent<SphereCollider>();
-            if (cueBallCollider == null || playerCamera == null || maxAimOffset <= 0f)
-            {
-                transform.LookAt(pointToLookAt);
-                return;
-            }
-
-            float ballRadius = cueBallCollider.radius * cueBall.transform.localScale.x;
-            Vector2 normalizedOffset = aimOffset / maxAimOffset;
-            Vector3 localOffset = (playerCamera.right * normalizedOffset.x + playerCamera.up * normalizedOffset.y) * ballRadius;
-            Vector3 surfacePosition = cueBall.position + localOffset;
-
-            Vector3 directionFromCenter = (surfacePosition - cueBall.position).normalized;
+            Vector3 directionFromCenter = (pointToLookAt - cueBall.position).normalized;
             if (directionFromCenter.sqrMagnitude < 0.0001f)
             {
                 directionFromCenter = AimDirection.sqrMagnitude > 0.0001f ? AimDirection.normalized : Vector3.forward;
             }
 
             float visualizerRadius = strikePointVisualizer.transform.localScale.x / 2.0f;
-            Vector3 visualizerPosition = surfacePosition + directionFromCenter * visualizerRadius;
+            Vector3 visualizerPosition = pointToLookAt + directionFromCenter * visualizerRadius;
             strikePointVisualizer.position = visualizerPosition;
             strikePointVisualizer.rotation = Quaternion.LookRotation(directionFromCenter);
-
-            pointToLookAt = surfacePosition;
-            lastAimedPoint = surfacePosition;
         }
 
         transform.LookAt(pointToLookAt);
+    }
+
+    private Vector3 GetCurrentAimedPoint()
+    {
+        if (cueBall == null)
+        {
+            return transform.position + transform.forward;
+        }
+
+        if (aimOffset.sqrMagnitude < 0.0001f || playerCamera == null || maxAimOffset <= 0f)
+        {
+            return cueBall.position;
+        }
+
+        SphereCollider cueBallCollider = cueBall.GetComponent<SphereCollider>();
+        if (cueBallCollider == null)
+        {
+            return cueBall.position;
+        }
+
+        float ballRadius = cueBallCollider.radius * cueBall.transform.localScale.x;
+        Vector2 normalizedOffset = aimOffset / maxAimOffset;
+        Vector3 localOffset = (playerCamera.right * normalizedOffset.x + playerCamera.up * normalizedOffset.y) * ballRadius;
+
+        return cueBall.position + localOffset;
     }
 
     private void StartCharge()
@@ -303,7 +315,9 @@ public class CueController : MonoBehaviour
             return false;
         }
 
-        ApplyStrike(strikeDirection.normalized, strikePosition, clampedPower);
+        Vector3 serverStrikePosition = ClampStrikePositionToServerCueBall(strikePosition);
+        Vector3 serverStrikeDirection = SanitizeStrikeDirection(strikeDirection, serverStrikePosition - cueBall.position);
+        ApplyStrike(serverStrikeDirection, serverStrikePosition, clampedPower);
         return true;
     }
 
@@ -329,13 +343,83 @@ public class CueController : MonoBehaviour
         Rigidbody cueBallRb = cueBall.GetComponent<Rigidbody>();
         if (cueBallRb == null) return;
 
+        EnsureCueBallPhysicsReady(cueBallRb);
+
+        strikeDirection = SanitizeStrikeDirection(strikeDirection, cueBall.position - transform.position);
+        strikePosition = ClampStrikePositionToServerCueBall(strikePosition);
+
         if (SoundManager.Instance != null)
         {
             SoundManager.Instance.PlayCueStrike(strikePower, maxPower);
         }
 
+        cueBallRb.linearVelocity = new Vector3(cueBallRb.linearVelocity.x, 0f, cueBallRb.linearVelocity.z);
         GameManager.Instance.ChangeState(GameState.BallsMoving);
         cueBallRb.AddForceAtPosition(strikeDirection * strikePower, strikePosition, ForceMode.Impulse);
+    }
+
+    private void EnsureCueBallPhysicsReady(Rigidbody cueBallRb)
+    {
+        cueBall.gameObject.SetActive(true);
+        cueBallRb.isKinematic = false;
+
+        Collider cueBallCollider = cueBall.GetComponent<Collider>();
+        if (cueBallCollider != null)
+        {
+            cueBallCollider.enabled = true;
+        }
+
+        BallPhysics cueBallPhysics = cueBall.GetComponent<BallPhysics>();
+        if (cueBallPhysics != null)
+        {
+            cueBallPhysics.enabled = !IsNetworkClientOnly();
+        }
+
+        Physics.SyncTransforms();
+    }
+
+    private Vector3 ClampStrikePositionToServerCueBall(Vector3 requestedStrikePosition)
+    {
+        if (cueBall == null)
+        {
+            return requestedStrikePosition;
+        }
+
+        Vector3 center = cueBall.position;
+        SphereCollider cueBallCollider = cueBall.GetComponent<SphereCollider>();
+        if (cueBallCollider == null)
+        {
+            return center;
+        }
+
+        float ballRadius = cueBallCollider.radius * cueBall.transform.localScale.x;
+        Vector3 offset = requestedStrikePosition - center;
+        offset.y = 0f;
+
+        float maxOffset = ballRadius * 0.95f;
+        if (offset.sqrMagnitude > maxOffset * maxOffset)
+        {
+            offset = offset.normalized * maxOffset;
+        }
+
+        return center + offset;
+    }
+
+    private static Vector3 SanitizeStrikeDirection(Vector3 requestedDirection, Vector3 fallbackDirection)
+    {
+        requestedDirection.y = 0f;
+        if (requestedDirection.sqrMagnitude > 0.0001f)
+        {
+            return requestedDirection.normalized;
+        }
+
+        fallbackDirection.y = 0f;
+        if (fallbackDirection.sqrMagnitude > 0.0001f)
+        {
+            return fallbackDirection.normalized;
+        }
+
+        return Vector3.forward;
     }
 
     private void ResetStrikeState()

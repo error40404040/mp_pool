@@ -82,7 +82,7 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
-        if (CurrentState == GameState.BallsMoving)
+        if (CurrentState == GameState.BallsMoving && HasLocalRulesAuthority())
         {
             CheckIfBallsHaveStopped();
         }
@@ -114,6 +114,11 @@ public class GameManager : MonoBehaviour
 
     private void CheckIfBallsHaveStopped()
     {
+        if (!HasLocalRulesAuthority())
+        {
+            return;
+        }
+
         bool areBallsMoving = false;
         for (int i = 0; i < allBalls.Count; i++)
         {
@@ -278,6 +283,10 @@ public class GameManager : MonoBehaviour
 
     private void ResolveTurn()
     {
+        if (!HasLocalRulesAuthority())
+        {
+            return;
+        }
 
         if (wasFoulCommitted)
         {
@@ -543,7 +552,7 @@ public class GameManager : MonoBehaviour
             return false;
         }
 
-        ApplyCueBallPlacement(position);
+        ApplyCueBallPlacement(ResolveServerCueBallPlacement(position));
         ChangeState(GameState.PlayerAiming);
         return true;
     }
@@ -570,7 +579,7 @@ public class GameManager : MonoBehaviour
     public void ApplyNetworkCueBallPreview(Vector3 position)
     {
         NetworkManager networkManager = NetworkManager.Singleton;
-        if ((networkManager != null && networkManager.IsServer && !networkManager.IsClient)
+        if ((networkManager != null && networkManager.IsServer)
             || CurrentState != GameState.PlacingCueBall
             || CanLocalControlCurrentPlayer()
             || cueController == null
@@ -614,7 +623,7 @@ public class GameManager : MonoBehaviour
 
     public void ApplyLocalCueBallPlacement(Vector3 position)
     {
-        ApplyCueBallPlacement(position);
+        ApplyCueBallPlacement(ResolveServerCueBallPlacement(position));
         FinishPlacingBall();
     }
 
@@ -656,6 +665,12 @@ public class GameManager : MonoBehaviour
             cueBallCollider.enabled = true;
         }
 
+        BallPhysics cueBallPhysics = cueBall.GetComponent<BallPhysics>();
+        if (cueBallPhysics != null)
+        {
+            cueBallPhysics.enabled = !IsNetworkClientOnly();
+        }
+
         Physics.SyncTransforms();
 
         MeshRenderer[] renderers = cueBall.GetComponentsInChildren<MeshRenderer>(true);
@@ -668,6 +683,55 @@ public class GameManager : MonoBehaviour
         {
             NetworkBallSync.Instance.BroadcastNow();
         }
+    }
+
+    private Vector3 ResolveServerCueBallPlacement(Vector3 requestedPosition)
+    {
+        Transform cueBall = cueController.cueBall;
+        Vector3 normalizedRequestedPosition = new Vector3(requestedPosition.x, GetCueBallPlacementY(cueBall), requestedPosition.z);
+        if (IsCueBallPlacementClear(normalizedRequestedPosition))
+        {
+            return normalizedRequestedPosition;
+        }
+
+        Vector3 safePosition = GetSafeCueBallPlacementPosition();
+        return IsCueBallPlacementClear(safePosition) ? safePosition : normalizedRequestedPosition;
+    }
+
+    private bool IsCueBallPlacementClear(Vector3 position)
+    {
+        if (cueController == null || cueController.cueBall == null)
+        {
+            return false;
+        }
+
+        Rigidbody cueBallRb = cueController.cueBall.GetComponent<Rigidbody>();
+        SphereCollider cueBallCollider = cueController.cueBall.GetComponent<SphereCollider>();
+        if (cueBallCollider == null)
+        {
+            return true;
+        }
+
+        float cueBallRadius = cueBallCollider.radius * cueController.cueBall.localScale.x;
+        foreach (Rigidbody otherBall in allBalls)
+        {
+            if (otherBall == null || otherBall == cueBallRb || !otherBall.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            SphereCollider otherSphere = otherBall.GetComponent<SphereCollider>();
+            float otherRadius = otherSphere != null ? otherSphere.radius * otherBall.transform.localScale.x : cueBallRadius;
+            Vector2 cuePosition = new Vector2(position.x, position.z);
+            Vector2 otherPosition = new Vector2(otherBall.position.x, otherBall.position.z);
+            float minimumDistance = (cueBallRadius + otherRadius) * 0.95f;
+            if ((cuePosition - otherPosition).sqrMagnitude < minimumDistance * minimumDistance)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private Vector3 GetSafeCueBallPlacementPosition()
@@ -722,6 +786,12 @@ public class GameManager : MonoBehaviour
     {
         NetworkManager networkManager = NetworkManager.Singleton;
         return networkManager != null && networkManager.IsListening && networkManager.IsClient && !networkManager.IsServer;
+    }
+
+    private static bool HasLocalRulesAuthority()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager == null || !networkManager.IsListening || networkManager.IsServer;
     }
 
     private static bool CanLocalControlCurrentPlayer()

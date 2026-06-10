@@ -8,6 +8,9 @@ using System.Collections.Generic;
 public class UIManager : MonoBehaviour
 {
     public static UIManager Instance { get; private set; }
+    private const string MusicVolumeKey = "MusicVolume";
+    private const string SfxVolumeKey = "SFXVolume";
+    private const float DefaultVolume = 0.2f;
 
     [Header("Панели игроков")]
     public CanvasGroup p1CanvasGroup;
@@ -65,8 +68,14 @@ public class UIManager : MonoBehaviour
 
     private void Start()
     {
-        if (musicSlider != null) SetMusicVolume(musicSlider.value);
-        if (sfxSlider != null) SetSFXVolume(sfxSlider.value);
+        float musicVolume = PlayerPrefs.GetFloat(MusicVolumeKey, DefaultVolume);
+        float sfxVolume = PlayerPrefs.GetFloat(SfxVolumeKey, DefaultVolume);
+
+        if (musicSlider != null) musicSlider.SetValueWithoutNotify(musicVolume);
+        if (sfxSlider != null) sfxSlider.SetValueWithoutNotify(sfxVolume);
+
+        ApplyMixerVolume("MusicVol", musicVolume);
+        ApplyMixerVolume("SFXVol", sfxVolume);
         RefreshPlayerNames();
     }
 
@@ -113,19 +122,24 @@ public class UIManager : MonoBehaviour
 
     public void SetMusicVolume(float sliderValue)
     {
-        if (masterMixer != null)
-        {
-            float dB = Mathf.Log10(Mathf.Clamp(sliderValue, 0.0001f, 1f)) * 20;
-            masterMixer.SetFloat("MusicVol", dB);
-        }
+        PlayerPrefs.SetFloat(MusicVolumeKey, Mathf.Clamp(sliderValue, 0.0001f, 1f));
+        PlayerPrefs.Save();
+        ApplyMixerVolume("MusicVol", sliderValue);
     }
 
     public void SetSFXVolume(float sliderValue)
     {
+        PlayerPrefs.SetFloat(SfxVolumeKey, Mathf.Clamp(sliderValue, 0.0001f, 1f));
+        PlayerPrefs.Save();
+        ApplyMixerVolume("SFXVol", sliderValue);
+    }
+
+    private void ApplyMixerVolume(string exposedParameter, float sliderValue)
+    {
         if (masterMixer != null)
         {
             float dB = Mathf.Log10(Mathf.Clamp(sliderValue, 0.0001f, 1f)) * 20;
-            masterMixer.SetFloat("SFXVol", dB);
+            masterMixer.SetFloat(exposedParameter, dB);
         }
     }
 

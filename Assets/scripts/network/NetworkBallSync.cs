@@ -6,10 +6,22 @@ public class NetworkBallSync : MonoBehaviour
 {
     public static NetworkBallSync Instance { get; private set; }
 
-    [SerializeField] private float syncInterval = 0.05f;
+    [SerializeField] private float syncInterval = 0.08f;
+    [SerializeField] private float interpolationSpeed = 16f;
+    [SerializeField] private float snapDistance = 1f;
 
     private readonly Dictionary<int, BallInfo> ballsByKey = new Dictionary<int, BallInfo>();
+    private readonly Dictionary<int, InterpolatedBallState> targetStatesByKey = new Dictionary<int, InterpolatedBallState>();
     private float nextSyncTime;
+
+    private struct InterpolatedBallState
+    {
+        public bool IsActive;
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public Vector3 LinearVelocity;
+        public Vector3 AngularVelocity;
+    }
 
     private void Awake()
     {
@@ -44,6 +56,16 @@ public class NetworkBallSync : MonoBehaviour
 
         nextSyncTime = Time.time + syncInterval;
         BroadcastNow();
+    }
+
+    private void Update()
+    {
+        if (IsNetworkServer())
+        {
+            return;
+        }
+
+        InterpolateTargetStates();
     }
 
     public void BroadcastNow()
@@ -111,12 +133,19 @@ public class NetworkBallSync : MonoBehaviour
             return;
         }
 
-        if (ball.gameObject.activeSelf != state.IsActive)
+        int key = GetKey(state.Type, state.Number);
+        bool shouldInterpolate = state.IsActive
+            && GameManager.Instance != null
+            && GameManager.Instance.CurrentState == GameState.BallsMoving;
+
+        if (!shouldInterpolate)
         {
-            ball.gameObject.SetActive(state.IsActive);
+            targetStatesByKey.Remove(key);
+            ApplyStateImmediate(ball, state);
+            return;
         }
 
-        ball.transform.SetPositionAndRotation(state.Position, state.Rotation);
+        EnsureClientBallPresentation(ball, state.IsActive);
 
         Rigidbody rb = ball.GetComponent<Rigidbody>();
         if (rb != null)
@@ -126,16 +155,87 @@ public class NetworkBallSync : MonoBehaviour
             rb.angularVelocity = state.AngularVelocity;
         }
 
+        targetStatesByKey[key] = new InterpolatedBallState
+        {
+            IsActive = state.IsActive,
+            Position = state.Position,
+            Rotation = state.Rotation,
+            LinearVelocity = state.LinearVelocity,
+            AngularVelocity = state.AngularVelocity
+        };
+    }
+
+    private void ApplyStateImmediate(BallInfo ball, NetworkBallState state)
+    {
+        EnsureClientBallPresentation(ball, state.IsActive);
+        ball.transform.SetPositionAndRotation(state.Position, state.Rotation);
+
+        Rigidbody rb = ball.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.isKinematic = true;
+            rb.linearVelocity = state.LinearVelocity;
+            rb.angularVelocity = state.AngularVelocity;
+        }
+    }
+
+    private void InterpolateTargetStates()
+    {
+        if (targetStatesByKey.Count == 0)
+        {
+            return;
+        }
+
+        float t = 1f - Mathf.Exp(-interpolationSpeed * Time.deltaTime);
+
+        foreach (KeyValuePair<int, InterpolatedBallState> pair in targetStatesByKey)
+        {
+            if (!ballsByKey.TryGetValue(pair.Key, out BallInfo ball) || ball == null)
+            {
+                continue;
+            }
+
+            InterpolatedBallState target = pair.Value;
+            EnsureClientBallPresentation(ball, target.IsActive);
+
+            float distance = Vector3.Distance(ball.transform.position, target.Position);
+            if (distance > snapDistance)
+            {
+                ball.transform.SetPositionAndRotation(target.Position, target.Rotation);
+            }
+            else
+            {
+                ball.transform.position = Vector3.Lerp(ball.transform.position, target.Position, t);
+                ball.transform.rotation = Quaternion.Slerp(ball.transform.rotation, target.Rotation, t);
+            }
+
+            Rigidbody rb = ball.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.linearVelocity = target.LinearVelocity;
+                rb.angularVelocity = target.AngularVelocity;
+            }
+        }
+    }
+
+    private static void EnsureClientBallPresentation(BallInfo ball, bool isActive)
+    {
+        if (ball.gameObject.activeSelf != isActive)
+        {
+            ball.gameObject.SetActive(isActive);
+        }
+
         Collider collider = ball.GetComponent<Collider>();
         if (collider != null)
         {
-            collider.enabled = state.IsActive;
+            collider.enabled = isActive;
         }
 
         MeshRenderer[] renderers = ball.GetComponentsInChildren<MeshRenderer>(true);
         foreach (MeshRenderer renderer in renderers)
         {
-            renderer.enabled = state.IsActive;
+            renderer.enabled = isActive;
         }
     }
 

@@ -141,6 +141,20 @@ public class NetworkLobbyManager : MonoBehaviour
 
     private void BackToMultiplayerMenu()
     {
+        NetworkConnectionMenu connectionMenu = FindFirstObjectByType<NetworkConnectionMenu>(FindObjectsInactive.Include);
+        if (connectionMenu != null)
+        {
+            connectionMenu.BackToMultiplayerMenu();
+            RefreshView();
+            return;
+        }
+
+        ResolveMenuNavigator();
+        if (menuNavigator != null)
+        {
+            menuNavigator.ShowMultiplayerMenu();
+        }
+
         NetworkManager networkManager = NetworkManager.Singleton;
         if (networkManager != null && networkManager.IsListening)
         {
@@ -148,13 +162,6 @@ public class NetworkLobbyManager : MonoBehaviour
         }
 
         NetworkClientData.RelayJoinCode = null;
-        ResolveMenuNavigator();
-
-        if (menuNavigator != null)
-        {
-            menuNavigator.ShowMultiplayerMenu();
-        }
-
         RefreshView();
     }
 
@@ -179,12 +186,12 @@ public class NetworkLobbyManager : MonoBehaviour
 
         if (readyButtonText != null)
         {
-            readyButtonText.text = localPlayer != null && localPlayer.IsReady ? "Cancel Ready" : "Ready";
+            readyButtonText.text = localPlayer != null && localPlayer.IsReady ? "Отменить" : "Готов";
         }
 
         if (startGameButtonText != null)
         {
-            startGameButtonText.text = "Start Game";
+            startGameButtonText.text = "Начать игру";
         }
 
         SetLobbyText(BuildLobbyStateText(networkManager, isConnected, canStart));
